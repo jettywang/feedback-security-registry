@@ -207,6 +207,31 @@ class UnknownTypeException(RegistryException):
     def __str__(self):
         return "Unknown Type Exception (%s)" % (self._value)
 
+
+class LargeDataParseException(ParseException):
+    """
+    An exception to be raised when the external data cells or large data
+    (DB/DBIndirect) segments backing a value do not contain the number of
+    bytes declared by the VK record.
+
+    The reader never reaches into adjacent cells to satisfy the declared
+    length. When one or more leading segments were still readable, the
+    exact prefix they contribute is exposed as `recovered_data` so callers
+    can distinguish a recoverable prefix from a wholly structural error
+    (where `recovered_data` is the empty byte string).
+    """
+    def __init__(self, value, declared_length=0, recovered_data=b"",
+                 segment_count=0, offset=None):
+        super(LargeDataParseException, self).__init__(value)
+        self.declared_length = declared_length
+        self.recovered_data = bytes(recovered_data)
+        self.recovered_length = len(self.recovered_data)
+        self.segment_count = segment_count
+        self.offset = offset
+
+    def __str__(self):
+        return "Large Data Parse Exception (%s)" % (self._value)
+
 class NotSupportedException(RegistryException):
     """
     An exception to be thrown during Windows Registry parsing, when something is not supported yet.
@@ -712,6 +737,8 @@ class DBIndirectBlock(Record):
     The DBIndirect block is a list of offsets to DataRecords with data
     size up to 0x3fd8.
     """
+    MAX_SEGMENT_DATA_SIZE = 0x3fd8
+
     def __init__(self, buf, offset, parent):
         """
         Constructor.
@@ -725,21 +752,106 @@ class DBIndirectBlock(Record):
     def __str__(self):
         return "Large Data Block at 0x%x" % (self.offset())
 
-    def large_data(self, length):
+    def _hbins_bounds(self):
+        h = self.parent()
+        while h.__class__.__name__ != "HBINBlock":
+            h = h.parent()
+        first_hbin = h.first_hbin()
+        regf = first_hbin.parent()
+        return (first_hbin.offset(),
+                first_hbin.offset() + regf.hbins_size())
+
+    def large_data(self, length, overrun=0):
         """
         Get the data pointed to by the indirect block. It may be large.
         Return a byte string.
-        """
-        b = bytearray()
-        count = 0
-        while length > 0:
-            off = self.abs_offset_from_hbin_offset(self.unpack_dword(4 * count))
-            size = min(0x3fd8, length)
-            b += HBINCell(self._buf, off, self).raw_data()[0:size]
 
+        Each referenced data cell must independently provide the bytes it
+        is declared to contribute; cells are never read past their size, so
+        a short cell cannot borrow bytes from an adjacent cell. Structural
+        problems (out of bounds references, duplicate segment references, or
+        a declared length greater than the available data) raise
+        LargeDataParseException, carrying the recoverable prefix read from
+        the intact leading segments.
+        """
+        hbin_start, hbin_end = self._hbins_bounds()
+        recovered = bytearray()
+        seen_offsets = set()
+        count = 0
+        remaining = length
+
+        while remaining > 0:
+            relative_offset = self.unpack_dword(4 * count)
+            absolute_offset = self.abs_offset_from_hbin_offset(relative_offset)
+
+            if relative_offset in seen_offsets:
+                raise LargeDataParseException(
+                    "Duplicate large data segment reference 0x%x at index %d"
+                    % (relative_offset, count),
+                    declared_length=length,
+                    recovered_data=recovered,
+                    segment_count=count,
+                    offset=absolute_offset)
+            seen_offsets.add(relative_offset)
+
+            if not hbin_start <= absolute_offset < hbin_end:
+                raise LargeDataParseException(
+                    "Large data segment reference 0x%x is outside the HBIN "
+                    "storage area" % (relative_offset),
+                    declared_length=length,
+                    recovered_data=recovered,
+                    segment_count=count,
+                    offset=absolute_offset)
+
+            cell = HBINCell(self._buf, absolute_offset, self)
+            if cell.is_free():
+                raise LargeDataParseException(
+                    "Large data segment at 0x%x references a free cell"
+                    % (absolute_offset),
+                    declared_length=length,
+                    recovered_data=recovered,
+                    segment_count=count,
+                    offset=absolute_offset)
+
+            need = min(self.MAX_SEGMENT_DATA_SIZE, remaining)
+            available = cell.size() - 4
+            if available < need:
+                raise LargeDataParseException(
+                    "Large data segment %d at 0x%x provides only %d of %d "
+                    "declared bytes" % (count, absolute_offset, available, need),
+                    declared_length=length,
+                    recovered_data=recovered,
+                    segment_count=count,
+                    offset=absolute_offset)
+
+            segment = self._buf[cell.data_offset():cell.data_offset() + need]
+            if len(segment) != need:
+                raise LargeDataParseException(
+                    "Large data segment %d at 0x%x runs past the end of the "
+                    "buffer" % (count, absolute_offset),
+                    declared_length=length,
+                    recovered_data=recovered,
+                    segment_count=count,
+                    offset=absolute_offset)
+
+            recovered += segment
             count += 1
-            length -= size
-        return bytes(b)
+            remaining -= need
+
+        result = bytes(recovered)
+        if overrun > 0:
+            # Best-effort read of bytes beyond the declared value, limited to
+            # the slack still contained inside the final segment cell.
+            tail_relative_offset = self.unpack_dword(4 * (count - 1))
+            tail_cell = HBINCell(
+                self._buf,
+                self.abs_offset_from_hbin_offset(tail_relative_offset),
+                self)
+            tail_declared = length - (count - 1) * self.MAX_SEGMENT_DATA_SIZE
+            slack = self._buf[tail_cell.data_offset() + tail_declared:
+                              tail_cell.data_offset() + tail_cell.size() - 4]
+            result += slack[:overrun]
+        return result
 
 
 class DBRecord(Record):
@@ -764,7 +876,7 @@ class DBRecord(Record):
     def __str__(self):
         return "Large Data Block at 0x%x" % (self.offset())
 
-    def large_data(self, length):
+    def large_data(self, length, overrun=0):
         """
         Get the data described by the DBRecord. It may be large.
         Return a byte array.
@@ -772,7 +884,7 @@ class DBRecord(Record):
         off = self.abs_offset_from_hbin_offset(self.unpack_dword(0x4))
         cell = HBINCell(self._buf, off, self)
         dbi = DBIndirectBlock(self._buf, cell.data_offset(), cell)
-        return dbi.large_data(length)
+        return dbi.large_data(length, overrun=overrun)
 
 
 def decode_utf16le(s):
@@ -1031,110 +1143,134 @@ class VKRecord(Record):
         else:
             return self.abs_offset_from_hbin_offset(self.unpack_dword(0x8))
 
+    def _hbins_bounds(self):
+        h = self.parent()
+        while h.__class__.__name__ != "HBINBlock":
+            h = h.parent()
+        first_hbin = h.first_hbin()
+        regf = first_hbin.parent()
+        return (first_hbin.offset(),
+                first_hbin.offset() + regf.hbins_size())
+
+    def _external_cell_data(self, cell_offset, data_length, overrun=0):
+        """
+        Read exactly `data_length` value bytes from the external data cell at
+        `cell_offset` (an HBINCell start offset).
+
+        The cell is a plain DataRecord: its four byte size prefix is not part
+        of the value, and reads are bounded by the cell's own size so that a
+        short cell can never borrow bytes from the adjacent cell. When the
+        declared length exceeds the available data, LargeDataParseException
+        carries the recoverable prefix still contained in the cell.
+        `overrun` performs a best-effort read of the in-cell slack beyond the
+        declared value.
+        """
+        hbin_start, hbin_end = self._hbins_bounds()
+        if not hbin_start <= cell_offset < hbin_end:
+            raise LargeDataParseException(
+                "External data cell at 0x%x is outside the HBIN storage area"
+                % (cell_offset),
+                declared_length=data_length,
+                recovered_data=b"",
+                offset=cell_offset)
+
+        cell = HBINCell(self._buf, cell_offset, self)
+        if cell.is_free():
+            raise LargeDataParseException(
+                "External data cell at 0x%x is free" % (cell_offset),
+                declared_length=data_length,
+                recovered_data=b"",
+                offset=cell_offset)
+
+        available = cell.size() - 4
+        if available < data_length:
+            # The recoverable prefix covers only the leading declared bytes
+            # the cell can still provide; trailing cell slack is padding, not
+            # value data, and must never be reported as recovered content.
+            prefix_length = min(available, data_length)
+            prefix = self._buf[cell.data_offset():
+                               cell.data_offset() + prefix_length]
+            raise LargeDataParseException(
+                "External data cell at 0x%x provides only %d of %d declared "
+                "bytes" % (cell_offset, available, data_length),
+                declared_length=data_length,
+                recovered_data=prefix,
+                offset=cell_offset)
+
+        # Overrun is capped at the cell's own slack so it can never reach into
+        # the neighbouring cell.
+        capped_overrun = min(overrun, available - data_length)
+        return self._buf[cell.data_offset():
+                         cell.data_offset() + data_length + capped_overrun]
+
     def raw_data(self, overrun=0):
         """
         Get the unparsed raw data.
+
+        Values are stored in exactly one of three shapes:
+
+          - inline: the data length field carries the 0x80000000 flag or the
+            actual length is below five; the bytes live in the four VK
+            data_offset bytes,
+          - external cell: five to 0x3fd8 bytes in a single DataRecord cell,
+          - large value: more than 0x3fd8 bytes reached through a DB record
+            and its DBIndirect segment list.
+
+        The high bit of the raw length field is stripped before any size
+        comparison so the same shape is selected regardless of the flag.
         """
         data_type = self.data_type()
-        data_length = self.raw_data_length()
+        raw_length = self.raw_data_length()
+        is_inline = raw_length < 5 or raw_length >= 0x80000000
+        actual_length = raw_length & 0x7FFFFFFF
         data_offset = self.data_offset()
         ret = None
 
-        if data_type == RegSZ or data_type == RegExpandSZ:
-            if data_length >= 0x80000000:
-                # data is contained in the data_offset field
-                ret = self._buf[data_offset:data_offset + 0x4]
-            elif 0x3fd8 < data_length < 0x80000000:
-                d = HBINCell(self._buf, data_offset, self)
-                if d.data_id() == b"db":
-                    # this should always be the case
-                    # but empirical testing does not confirm this
-                    ret = d.child().large_data(data_length + overrun)
-                else:
-                    ret = d.raw_data()[:data_length + overrun]
-            else:
-                d = HBINCell(self._buf, data_offset, self)
-                data_offset = d.data_offset()
-                ret = self._buf[data_offset:data_offset + data_length]
-        elif data_type == RegBin or data_type == RegNone \
-             or data_type in (RegUint8, RegInt16, RegUint16, RegInt32, RegUint32, 
-                              RegInt64, RegUint64, RegFloat, RegDouble, RegUnicodeChar, 
-                              RegBoolean, RegUnicodeString, RegCompositeValue,RegDateTimeOffset, 
-                              RegTimeSpan, RegGUID, RegUnk111, RegUnk112, RegUnk113, RegBytesArray, 
-                              RegInt16Array, RegUint16Array, RegInt32Array, RegUInt32Array, 
-                              RegInt64Array, RegUInt64Array, RegFloatArray, RegDoubleArray, 
-                              RegUnicodeCharArray, RegBooleanArray, RegUnicodeStringArray):
-            if data_length >= 0x80000000:
-                data_length -= 0x80000000
-                ret = self._buf[data_offset:data_offset + data_length + overrun]
-            elif 0x3fd8 < data_length < 0x80000000:
-                d = HBINCell(self._buf, data_offset, self)
-                if d.data_id() == b"db":
-                    # this should always be the case
-                    # but empirical testing does not confirm this
-                    ret = d.child().large_data(data_length + overrun)
-                else:
-                    ret = d.raw_data()[:data_length + overrun]
-            else:
-                ret = self._buf[data_offset + 4:data_offset + 4 + data_length + overrun]
-        elif data_type == RegDWord:
-            ret = self.unpack_binary(0x8, 0x4)
-        elif data_type == RegMultiSZ:
-            if data_length >= 0x80000000:
-                # this means data_length < 5, so it must be 4, and
-                # be composed of completely \x00, so the strings are empty
-                ret = b""
-            elif 0x3fd8 < data_length < 0x80000000:
-                d = HBINCell(self._buf, data_offset, self)
-                if d.data_id() == b"db":
-                    ret = d.child().large_data(data_length + overrun)
-                else:
-                    ret = d.raw_data()[:data_length + overrun]
-            else:
-                ret = self._buf[data_offset + 4:data_offset + 4 + data_length + overrun]
+        if data_type == RegDWord:
+            return self.unpack_binary(0x8, 0x4)
         elif data_type == RegQWord:
             d = HBINCell(self._buf, data_offset, self)
-            data_offset = d.data_offset()
-            ret = self._buf[data_offset:data_offset + 0x8]
+            cell_data_offset = d.data_offset()
+            return self._buf[cell_data_offset:cell_data_offset + 0x8]
         elif data_type == RegBigEndian:
             d = HBINCell(self._buf, data_offset, self)
-            data_offset = d.data_offset()
-            ret = self._buf[data_offset:data_offset + 4]
+            cell_data_offset = d.data_offset()
+            return self._buf[cell_data_offset:cell_data_offset + 4]
+        elif data_type == RegMultiSZ and is_inline:
+            # An inline MultiSZ is four zero bytes: an empty string list.
+            return b""
+
+        if is_inline:
+            # The inline payload is the four-byte data_offset field itself;
+            # overrun can never read past it.
+            inline_overrun = min(overrun, 4 - actual_length)
+            return self._buf[
+                data_offset:data_offset + actual_length + inline_overrun]
+
+        if actual_length > DBIndirectBlock.MAX_SEGMENT_DATA_SIZE:
+            d = HBINCell(self._buf, data_offset, self)
+            if d.data_id() == b"db":
+                # this should always be the case
+                # but empirical testing does not confirm this
+                ret = d.child().large_data(actual_length, overrun=overrun)
+            else:
+                ret = self._external_cell_data(
+                    data_offset, actual_length, overrun)
+            return ret
+
+        if data_type == RegSZ or data_type == RegExpandSZ:
+            # Strings do not use the overrun slack read.
+            ret = self._external_cell_data(data_offset, actual_length)
         elif data_type == RegLink or \
-                        data_type == RegResourceList or \
-                        data_type == RegFullResourceDescriptor or \
-                        data_type == RegResourceRequirementsList:
-            if data_length >= 0x80000000:
-                data_length -= 0x80000000
-                ret = self._buf[data_offset:data_offset + data_length]
-            elif 0x3fd8 < data_length < 0x80000000:
-                d = HBINCell(self._buf, data_offset, self)
-                if d.data_id() == b"db":
-                    # this should always be the case
-                    # but empirical testing does not confirm this
-                    ret = d.child().large_data(data_length)
-                else:
-                    ret = d.raw_data()[:data_length]
-            else:
-                ret = self._buf[data_offset + 4:data_offset + 4 + data_length]
-        elif data_type == RegFileTime:
-            ret = self._buf[data_offset + 4:data_offset + 4 + data_length]
-        elif data_length < 5 or data_length >= 0x80000000:
-            ret = self.unpack_binary(0x8, 4)
+                data_type == RegResourceList or \
+                data_type == RegFullResourceDescriptor or \
+                data_type == RegResourceRequirementsList:
+            ret = self._external_cell_data(data_offset, actual_length)
         else:
-            if data_length >= 0x80000000:
-                data_length -= 0x80000000
-                ret = self._buf[data_offset:data_offset + data_length]
-            elif 0x3fd8 < data_length < 0x80000000:
-                d = HBINCell(self._buf, data_offset, self)
-                if d.data_id() == b"db":
-                    # this should always be the case
-                    # but empirical testing does not confirm this
-                    ret = d.child().large_data(data_length)
-                else:
-                    ret = d.raw_data()[:data_length]
-            else:
-                ret = self._buf[data_offset + 4:data_offset + 4 + data_length]
+            # RegBin, RegNone, RegMultiSZ, RegFileTime, the settings.dat
+            # composite types and any remaining external value.
+            ret = self._external_cell_data(
+                data_offset, actual_length, overrun)
         return ret
 
     def data(self, overrun=0):
