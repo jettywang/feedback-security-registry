@@ -77,6 +77,36 @@ the author's itches.  Now he hopes it can be of use to
 someone outside of his lonely NYC apartment.
 
 
+Conservative snapshot diff
+--------------------------
+
+`Registry.diff` compares two snapshots of the same hive while treating cell
+offsets as provenance, never as identity. Keys are matched by their logical
+path and values by name, so a cell that was reused by a different key cannot
+mask an add or delete, and moving an unchanged key to another cell is not
+reported as a configuration change.
+
+    from Registry import Registry
+    from Registry.diff import diff_hives
+
+    result = diff_hives(Registry.Registry("security.before"),
+                        Registry.Registry("security.after"),
+                        root_path="Policy\\Microsoft")
+
+`result` separates `added_keys`, `removed_keys`, `added_values`,
+`removed_values` and `changed_values` (each change states independently
+whether the type and/or the raw bytes changed). Records keep the raw encoded
+key path components, the raw value bytes, value name encoding, and NK/VK/data
+offsets. The default value is represented by an empty on-disk name and an
+`is_default` flag. Findings that the snapshots cannot resolve — cell reuse,
+key relocation, a possible rename, duplicate value names, and case-only path
+collisions — go into `uncertainties` with a machine-readable `code`.
+
+The module reads no timestamps, so it never attributes a change to a user or
+implies an execution order; it reports only what the two snapshots directly
+prove. `samples/hive_diff.py` is a command-line front end for this interface.
+
+
 License
 -------
 As of version 0.2.0, python-registry is released under the Apache 2.0 license.
