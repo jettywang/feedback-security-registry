@@ -451,6 +451,30 @@ class Registry(object):
         # level? is this the name of the hive?
         return RegistryKey(self._regf.first_key()).find_key(path)
 
+    def bounded_traversal(self, max_nodes=100000, max_depth=256,
+                          max_index_depth=64, start_key=None):
+        """
+        Perform a bounded, forensics-oriented traversal of the key structure.
+
+        Unlike :meth:`RegistryKey.subkeys`, this never assumes the hive is a
+        well formed tree: cycles, duplicate references, free or out of
+        bounds cells, ri index nesting and inconsistent parent pointers are
+        reported as structured issues instead of raising or looping.
+
+        Arguments:
+        - `max_nodes`: maximum number of distinct keys to confirm.
+        - `max_depth`: maximum descent depth below `start_key`.
+        - `max_index_depth`: maximum ri index nesting depth.
+        - `start_key`: optional RegistryKey/NKRecord to start at (default root).
+
+        Returns a :class:`Registry.Traversal.TraversalReport` holding the
+        confirmed nodes/values separately from the unfinished ranges.
+        """
+        from .Traversal import BoundedTraversal
+        return BoundedTraversal(self, max_nodes=max_nodes,
+                                max_depth=max_depth,
+                                max_index_depth=max_index_depth).traverse(start_key)
+
 def print_all(key):
     if len(key.subkeys()) == 0:
         print(key.path())

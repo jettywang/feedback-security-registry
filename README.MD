@@ -67,6 +67,48 @@ Advanced users who wish to study the structure of the Windows
 Registry may find the `Registry.RegistryParse` module useful.
 This module implements all known structures of the Windows Registry.
 
+
+Bounded traversal of damaged hives
+----------------------------------
+
+The regular `RegistryKey.subkeys()` interface assumes a well formed,
+tree shaped hive. A damaged hive can chain its subkey index (`lf`,
+`lh`, `li`, `ri`) cells into a loop, point at free or out of bounds
+cells, or contain parent pointers that disagree with the subkey
+tables. Walking such a hive the normal way can raise out of the walk
+or recurse forever.
+
+The `Registry.Traversal` module provides `BoundedTraversal`, an
+iterative, forensics-oriented walker. It always terminates (every
+descent is limited by a node budget and a depth budget), keeps the
+keys and values it could confirm separate from the ranges it could
+not finish, and records each structural problem as a structured
+`TraversalIssue` instead of swallowing it. Every confirmed key reports
+its actual cell offset together with the reference path (the chain of
+cell offsets) that led to it.
+
+A node referenced from more than one place is a shared node, not a
+cycle. It is visited once, every additional reference is reported as a
+`duplicate_reference`, and path rendering stays bounded.
+
+    from Registry import Registry
+
+    reg = Registry.Registry("ntuser.dat")
+    report = reg.bounded_traversal(max_nodes=100000, max_depth=256)
+
+    print("completed:", report.completed)      # False if a budget was hit
+    for node in report.nodes:                  # confirmed keys only
+        print(hex(node.cell_offset), node.key_path(),
+              [value.name() for value in node.values])
+    for issue in report.issues:                # nothing is silently lost
+        print(issue.kind, issue.message,
+              Traversal.render_reference_path(issue.reference_path))
+
+The same walker is available directly as
+`Traversal.BoundedTraversal(reg).traverse(start_key)`, where
+`start_key` may be a `RegistryKey`, an `NKRecord`, or omitted to start
+at the hive root.
+
 Wanted
 ------
   - Bug reports.
