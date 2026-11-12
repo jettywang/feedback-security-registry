@@ -21,5 +21,6 @@ __all__ = [
     'Registry',
     'RegistryParse',
     'RegistryLog',
+    'RegistryCarve',
     'SettingsParse'
 ]

@@ -67,6 +67,22 @@ Advanced users who wish to study the structure of the Windows
 Registry may find the `Registry.RegistryParse` module useful.
 This module implements all known structures of the Windows Registry.
 
+Forensic scanning of deleted records
+------------------------------------
+The `Registry.RegistryCarve` module provides an explicit forensic scan
+mode, separate from the normal active-tree traversal. Its
+`DeletedRecordScanner` carves candidate `nk`/`vk` records from the free
+cells of a hive without ever modifying it. A two-byte signature alone is
+never treated as a recovery: every candidate is validated for cell
+bounds, name encoding, and data references, and is classified as
+`RELIABLE` (structure valid, all references verified), `PARTIAL`
+(structure valid, some references overwritten or unverifiable), or
+`ORPHAN` (only a fragment survives). Associations between records are
+reported only when verifiable through on-disk offsets -- a deleted value
+is never attached to a key merely because the names match. Every finding
+carries the absolute offset of its raw evidence bytes. See
+`samples/find_deleted.py` for a report-generating example.
+
 Wanted
 ------
   - Bug reports.
