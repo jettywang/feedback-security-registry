@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import sys
 import ntpath
+import binascii
 from enum import Enum
 
 from . import RegistryParse
@@ -98,6 +99,119 @@ class RegistryValueNotFoundException(RegistryParse.RegistryStructureDoesNotExist
     def __str__(self):
         return "Registry value not found: %s" % (self._value)
 
+
+class RegistryNameComponent(object):
+    """
+    The lossless, forensic representation of a single registry key or
+    value name. It preserves the raw name bytes exactly as stored in
+    the hive, together with the compression (encoding) flag, and
+    offers a best-effort decoded text plus a display-safe rendering.
+
+    Two components are equal only if both the raw bytes and the
+    compression flag match; names that merely look alike when decoded
+    (or that decode to the same string) are not considered equal.
+    """
+    def __init__(self, raw_bytes, is_compressed):
+        """
+        Constructor.
+        Arguments:
+        - `raw_bytes`: the raw name bytes as stored in the record.
+        - `is_compressed`: True if the name is stored in compressed
+              (8-bit) form, False if stored as UTF-16LE, or None if
+              the encoding is unknown (such a component matches any
+              encoding when used for lookups, but is never equal to
+              a fully specified component).
+        """
+        self.raw_bytes = bytes(raw_bytes)
+        self.is_compressed = None if is_compressed is None else bool(is_compressed)
+
+    @classmethod
+    def from_nkrecord(cls, nkrecord):
+        """
+        Build a component from an NKRecord (a key name).
+        """
+        return cls(nkrecord.raw_name(), nkrecord.has_ascii_name())
+
+    @classmethod
+    def from_vkrecord(cls, vkrecord):
+        """
+        Build a component from a VKRecord (a value name).
+        """
+        return cls(vkrecord.raw_name(), vkrecord.has_ascii_name())
+
+    @classmethod
+    def from_export(cls, mapping):
+        """
+        Rebuild a component from a mapping produced by export().
+        """
+        return cls(binascii.unhexlify(mapping["raw_hex"]), mapping["compressed"])
+
+    def text(self):
+        """
+        Best-effort decoded name text. Never raises; malformed names
+        are rendered with replacement characters. Do not use this to
+        establish the identity of a name: distinct raw names may
+        decode to the same text.
+        """
+        return RegistryParse.decode_name_bytes(self.raw_bytes, self.is_compressed)
+
+    def display(self):
+        """
+        A display-safe rendering of the name: control characters and
+        other non-printable code points are escaped, so the result is
+        safe to embed in logs and terminal output.
+        """
+        return RegistryParse.safe_display_text(self.text())
+
+    def export(self):
+        """
+        A JSON-serializable mapping preserving the raw bytes, the
+        compression flag, and the display-safe text.
+        """
+        return {
+            "raw_hex": binascii.hexlify(self.raw_bytes).decode("ascii"),
+            "compressed": self.is_compressed,
+            "display": self.display(),
+        }
+
+    def __eq__(self, other):
+        if not isinstance(other, RegistryNameComponent):
+            return NotImplemented
+        return (self.raw_bytes == other.raw_bytes
+                and self.is_compressed == other.is_compressed)
+
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return result
+        return not result
+
+    def __hash__(self):
+        return hash((self.raw_bytes, self.is_compressed))
+
+    def __repr__(self):
+        return 'RegistryNameComponent(display="{0}", raw_hex="{1}", compressed={2})'.format(
+            self.display(), binascii.hexlify(self.raw_bytes).decode("ascii"), self.is_compressed)
+
+
+def _coerce_name_component(component):
+    """
+    Normalize a user-supplied name component into a RegistryNameComponent.
+    Accepts a RegistryNameComponent, a raw byte string, a
+    (raw_bytes, is_compressed) tuple, or a mapping produced by
+    RegistryNameComponent.export().
+    """
+    if isinstance(component, RegistryNameComponent):
+        return component
+    if isinstance(component, bytes):
+        return RegistryNameComponent(component, None)
+    if isinstance(component, tuple):
+        return RegistryNameComponent(component[0], component[1])
+    if isinstance(component, dict):
+        return RegistryNameComponent.from_export(component)
+    raise TypeError("unsupported name component: %r" % (component,))
+
+
 class RegistryValue(object):
     """
     This is a high level structure for working with the Windows Registry.
@@ -108,8 +222,8 @@ class RegistryValue(object):
         self._vkrecord = vkrecord
 
     def __repr__(self):
-        return 'RegistryValue(name="{0}", value="{1}", type="{2}")'.format(self.name(), self.value(), self.value_type_str())
-        
+        return 'RegistryValue(name="{0}", value="{1}", type="{2}")'.format(self.display_name(), self.value(), self.value_type_str())
+
     def name(self):
         """
         Get the name of the value as a string.
@@ -119,6 +233,54 @@ class RegistryValue(object):
             return self._vkrecord.name()
         else:
             return  "(default)"
+
+    def is_default(self):
+        """
+        Is this the default (nameless) value of its key?
+        """
+        return not self._vkrecord.has_name()
+
+    def raw_name(self):
+        """
+        Get the raw name bytes exactly as stored in the hive.
+        The default value has an empty raw name.
+        """
+        return self._vkrecord.raw_name()
+
+    def name_component(self):
+        """
+        Get the lossless forensic representation of this value's name
+        as a RegistryNameComponent (raw bytes plus encoding flag).
+        """
+        return RegistryNameComponent.from_vkrecord(self._vkrecord)
+
+    def display_name(self):
+        """
+        Get a display-safe rendering of the name, with control
+        characters and other non-printable code points escaped.
+        Safe to embed in logs and terminal output.
+        """
+        if self.is_default():
+            return "(default)"
+        return self.name_component().display()
+
+    def export(self):
+        """
+        Export this value as a JSON-serializable mapping that
+        preserves the raw name bytes, the encoding flag, and a
+        display-safe name, alongside the type and raw data.
+        """
+        try:
+            data_hex = binascii.hexlify(self.raw_data()).decode("ascii")
+        except RegistryParse.RegistryException:
+            data_hex = None
+        return {
+            "name": self.name_component().export(),
+            "is_default": self.is_default(),
+            "display_name": self.display_name(),
+            "type": self.value_type_str(),
+            "raw_data_hex": data_hex,
+        }
 
     def value_type(self):
         """
@@ -253,11 +415,11 @@ class RegistryKey(object):
 
     def __str__(self):
         return "Registry Key %s with %d values and %d subkeys" % \
-            (self.path(), len(self.values()), len(self.subkeys()))
+            (self.display_path(), len(self.values()), len(self.subkeys()))
 
     def __repr__(self):
-        return 'RegistryKey(name="{0}", path="{1}")'.format(self.name(), self.path())
-    
+        return 'RegistryKey(name="{0}", path="{1}")'.format(self.display_name(), self.display_path())
+
 
     def __getitem__(self, key):
         return self.value(key)
@@ -277,6 +439,69 @@ class RegistryKey(object):
         See RegistryKey.path() to get the complete key name.
         """
         return self._nkrecord.name()
+
+    def raw_name(self):
+        """
+        Get the raw name bytes exactly as stored in the hive.
+        """
+        return self._nkrecord.raw_name()
+
+    def name_component(self):
+        """
+        Get the lossless forensic representation of this key's name
+        as a RegistryNameComponent (raw bytes plus encoding flag).
+        """
+        return RegistryNameComponent.from_nkrecord(self._nkrecord)
+
+    def display_name(self):
+        """
+        Get a display-safe rendering of the name, with control
+        characters and other non-printable code points escaped.
+        Safe to embed in logs and terminal output.
+        """
+        return self.name_component().display()
+
+    def path_components(self):
+        """
+        Get the full path of this key as a structured list of
+        RegistryNameComponent objects, ordered from the root key to
+        this key. Unlike path(), this preserves the raw name bytes
+        and encoding flags of every component, so the key can be
+        relocated unambiguously (see Registry.open_components()).
+        """
+        record = self._nkrecord
+        components = [RegistryNameComponent.from_nkrecord(record)]
+        offsets = set([record.offset()])
+        while record.has_parent_key():
+            record = record.parent_key()
+            if record.offset() in offsets:
+                break
+            components.append(RegistryNameComponent.from_nkrecord(record))
+            offsets.add(record.offset())
+        components.reverse()
+        return components
+
+    def display_path(self):
+        """
+        Get the full path of this key as a display-safe string,
+        with each component escaped by RegistryNameComponent.display().
+        """
+        return "\\".join(c.display() for c in self.path_components())
+
+    def export(self):
+        """
+        Export this key (recursively) as a JSON-serializable mapping.
+        The path is stored as a structured list of name components
+        preserving raw bytes and encoding flags, so the key can be
+        relocated with Registry.open_components().
+        """
+        return {
+            "path_components": [c.export() for c in self.path_components()],
+            "display_path": self.display_path(),
+            "timestamp": self.timestamp().isoformat(),
+            "values": [v.export() for v in self.values()],
+            "subkeys": [k.export() for k in self.subkeys()],
+        }
 
     def path(self):
         """
@@ -314,8 +539,12 @@ class RegistryKey(object):
     def subkey(self, name):
         """
         Return the subkey with a given name as a RegistryKey.
-        Raises RegistryKeyNotFoundException if the subkey with 
+        Raises RegistryKeyNotFoundException if the subkey with
           the given name does not exist.
+        Note: the comparison is a case-insensitive string match on
+          decoded names. Distinct raw names may compare equal here,
+          so this must not be used to prove two names are identical;
+          use subkey_by_raw_name() for forensic work.
         """
         if self._nkrecord.subkey_number() == 0:
             raise RegistryKeyNotFoundException(self.path() + "\\" + name)
@@ -324,6 +553,34 @@ class RegistryKey(object):
             if k.name().lower() == name.lower():
                 return RegistryKey(k)
         raise RegistryKeyNotFoundException(self.path() + "\\" + name)
+
+    def subkey_by_raw_name(self, raw_name, is_compressed=None):
+        """
+        Return the subkey whose stored name matches the given raw
+        bytes exactly, as a RegistryKey. If is_compressed is given,
+        the encoding (compression) flag must match as well.
+        Raises RegistryKeyNotFoundException if no such subkey exists.
+        This is the forensic lookup: two subkeys are only returned
+        for the same query if their stored names are byte-identical.
+        """
+        wanted = RegistryNameComponent(raw_name, is_compressed)
+        if self._nkrecord.subkey_number() == 0:
+            raise RegistryKeyNotFoundException(self._not_found_raw_name(wanted))
+
+        for k in self._nkrecord.subkey_list().keys():
+            candidate = RegistryNameComponent.from_nkrecord(k)
+            if candidate.raw_bytes != wanted.raw_bytes:
+                continue
+            if wanted.is_compressed is not None and candidate.is_compressed != wanted.is_compressed:
+                continue
+            return RegistryKey(k)
+        raise RegistryKeyNotFoundException(self._not_found_raw_name(wanted))
+
+    def _not_found_raw_name(self, component):
+        return "%s\\<raw:%s%s>" % (self.display_path(),
+                                   binascii.hexlify(component.raw_bytes).decode("ascii"),
+                                   "" if component.is_compressed is None
+                                   else (",compressed" if component.is_compressed else ",utf16"))
 
     def values(self):
         """
@@ -342,6 +599,10 @@ class RegistryKey(object):
         Return the value with the given name as a RegistryValue.
         Raises RegistryValueNotFoundExceptiono if the value with
           the given name does not exist.
+        Note: the comparison is a case-insensitive string match on
+          decoded names. Distinct raw names may compare equal here,
+          so this must not be used to prove two names are identical;
+          use value_by_raw_name() for forensic work.
         """
         if name == "(default)":
             name = ""
@@ -353,9 +614,47 @@ class RegistryKey(object):
             raise RegistryValueNotFoundException(self.path() + " : " + name)
         raise RegistryValueNotFoundException(self.path() + " : " + name)
 
+    def value_by_raw_name(self, raw_name, is_compressed=None):
+        """
+        Return the value whose stored name matches the given raw
+        bytes exactly, as a RegistryValue. If is_compressed is given,
+        the encoding (compression) flag must match as well.
+        The default value is addressed by the empty byte string.
+        Raises RegistryValueNotFoundException if no such value exists.
+        """
+        wanted = RegistryNameComponent(raw_name, is_compressed)
+        try:
+            for v in self._nkrecord.values_list().values():
+                candidate = RegistryNameComponent.from_vkrecord(v)
+                if candidate.raw_bytes != wanted.raw_bytes:
+                    continue
+                if wanted.is_compressed is not None and candidate.is_compressed != wanted.is_compressed:
+                    continue
+                return RegistryValue(v)
+        except RegistryParse.RegistryStructureDoesNotExist:
+            pass
+        raise RegistryValueNotFoundException(self._not_found_raw_name(wanted))
+
+    def find_key_by_components(self, components):
+        """
+        Relocate a descendant key from a structured list of name
+        components (relative to this key), as produced by
+        RegistryKey.path_components(). Each element may be a
+        RegistryNameComponent, a raw byte string, a
+        (raw_bytes, is_compressed) tuple, or an exported mapping.
+        """
+        key = self
+        for component in components:
+            component = _coerce_name_component(component)
+            key = key.subkey_by_raw_name(component.raw_bytes, component.is_compressed)
+        return key
+
     def find_key(self, path):
         """
         Perform a search for a RegistryKey with a specific path.
+        Note: the path is matched as decoded, case-insensitive
+          strings; use find_key_by_components() to relocate a key
+          unambiguously by its raw stored names.
         """
         if len(path) == 0:
             return self
@@ -445,11 +744,32 @@ class Registry(object):
         Subkeys are separated by the backslash character ('\').
         A trailing backslash may or may not be present.
         The hive name should not be included.
+        Note: the path is matched as decoded, case-insensitive
+          strings; use open_components() to relocate a key
+          unambiguously by its raw stored names.
         """
         # is the first registry key always the root?
         # are there any other keys at this
         # level? is this the name of the hive?
         return RegistryKey(self._regf.first_key()).find_key(path)
+
+    def open_components(self, components):
+        """
+        Return a RegistryKey by a structured list of name components,
+        as produced by RegistryKey.path_components() (a leading root
+        component is verified and consumed) or by
+        RegistryKey.export(). Each element may be a
+        RegistryNameComponent, a raw byte string, a
+        (raw_bytes, is_compressed) tuple, or an exported mapping.
+        Matching is by exact raw name bytes (and encoding flag, when
+        known), so keys whose names merely display alike are not
+        confused.
+        """
+        components = [_coerce_name_component(c) for c in components]
+        root = RegistryKey(self._regf.first_key())
+        if components and components[0] == root.name_component():
+            components = components[1:]
+        return root.find_key_by_components(components)
 
 def print_all(key):
     if len(key.subkeys()) == 0:

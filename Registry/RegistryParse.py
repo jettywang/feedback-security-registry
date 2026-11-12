@@ -26,6 +26,7 @@ import struct
 import datetime
 import decimal
 import binascii
+import unicodedata
 from ctypes import c_uint32
 from enum import Enum
 from collections import namedtuple
@@ -809,6 +810,72 @@ def decode_utf16le(s):
     return s
 
 
+def decode_name_bytes(raw, is_compressed):
+    """
+    decode_name_bytes best-effort decodes a raw key or value name.
+      It never raises a Unicode-related exception: malformed input
+      (such as truncated UTF-16) is decoded with replacement characters.
+      The raw bytes remain the authoritative representation; this text
+      is only a convenience rendering.
+
+    @type raw: bytes
+    @param raw: the raw name bytes as stored in the NK or VK record
+    @type is_compressed: bool
+    @param is_compressed: True if the name is stored in compressed
+      (8-bit, windows-1252) form, False if stored as UTF-16LE
+    @rtype: unicode
+    @return: the best-effort decoded name
+    """
+    if is_compressed:
+        return raw.decode("windows-1252", errors="replace")
+    s = raw
+    if (len(s) % 2) != 0:
+        s = s + b"\x00"
+    return s.decode("utf-16le", errors="replace")
+
+
+def _is_printable_char(ch):
+    """
+    Equivalent of str.isprintable() for a single character, provided
+    for Python 2 compatibility.
+    """
+    if ch == u" ":
+        return True
+    return unicodedata.category(ch)[0] not in ("C", "Z")
+
+
+def safe_display_text(text):
+    """
+    safe_display_text renders a string so it is safe to embed in logs
+      and terminal output. Control characters, unpaired surrogates and
+      other non-printable code points are replaced by backslash escape
+      sequences, so a malicious name cannot inject terminal control
+      sequences or forge additional log lines. Backslashes themselves
+      are escaped so the rendering stays unambiguous. Printable
+      characters (including non-BMP characters) are passed through
+      unchanged.
+
+    @type text: unicode
+    @param text: the string to render
+    @rtype: unicode
+    @return: the escaped, display-safe string
+    """
+    out = []
+    for ch in text:
+        codepoint = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif _is_printable_char(ch):
+            out.append(ch)
+        elif codepoint <= 0xFF:
+            out.append("\\x%02x" % (codepoint))
+        elif codepoint <= 0xFFFF:
+            out.append("\\u%04x" % (codepoint))
+        else:
+            out.append("\\U%08x" % (codepoint))
+    return "".join(out)
+
+
 class VKRecord(Record):
     """
     The VKRecord holds one name-value pair.  The data may be one of many types,
@@ -973,18 +1040,30 @@ class VKRecord(Record):
         """
         return self.unpack_word(0x10) & 1 == 1
 
+    def raw_name(self):
+        """
+        Get the raw name bytes exactly as stored in this record.
+        The empty byte string is returned for the default value.
+        Together with has_ascii_name(), this is the lossless,
+        forensic representation of the value name.
+        @return: byte string containing the unparsed name
+        """
+        if not self.has_name():
+            return b""
+        name_length = self.unpack_word(0x2)
+        return self.unpack_string(0x14, name_length)
+
     def name(self):
         """
         Get the name, if it exists. If not, the empty string is returned.
+        Malformed names (for example, truncated UTF-16) are decoded
+        best-effort with replacement characters; use raw_name() for the
+        authoritative representation.
         @return: unicode string containing the name
         """
         if not self.has_name():
             return ""
-        name_length = self.unpack_word(0x2)
-        unpacked_string = self.unpack_string(0x14, name_length)
-        if self.has_ascii_name():
-            return unpacked_string.decode("windows-1252")
-        return unpacked_string.decode("utf-16le")
+        return decode_name_bytes(self.raw_name(), self.has_ascii_name())
 
     def has_timestamp(self):
         """
@@ -1530,16 +1609,25 @@ class NKRecord(Record):
     def has_ascii_name(self):
         return self.unpack_word(0x2) & 0x0020 > 0
 
+    def raw_name(self):
+        """
+        Return the raw registry key name bytes exactly as stored in
+        this record. Together with has_ascii_name(), this is the
+        lossless, forensic representation of the key name.
+        @return: byte string containing the unparsed name
+        """
+        name_length = self.unpack_word(0x48)
+        return self.unpack_string(0x4C, name_length)
+
     def name(self):
         """
         Return the registry key name as a string.
+        Malformed names (for example, truncated UTF-16) are decoded
+        best-effort with replacement characters; use raw_name() for the
+        authoritative representation.
         @return: unicode string containing the name
         """
-        name_length = self.unpack_word(0x48)
-        unpacked_string = self.unpack_string(0x4C, name_length)
-        if self.has_ascii_name():
-            return unpacked_string.decode("windows-1252")
-        return unpacked_string.decode("utf-16le")
+        return decode_name_bytes(self.raw_name(), self.has_ascii_name())
 
     def path(self):
           """

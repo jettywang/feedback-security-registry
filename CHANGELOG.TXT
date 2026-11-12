@@ -1,3 +1,14 @@
+1.3.0
+  - add lossless forensic name representation: raw_name() on NKRecord/VKRecord and
+    RegistryKey/RegistryValue, plus RegistryNameComponent (raw bytes + compression flag)
+  - add structured path components (RegistryKey.path_components()) and relocation by raw
+    names (Registry.open_components(), find_key_by_components(), subkey_by_raw_name(),
+    value_by_raw_name())
+  - add display-safe renderings (display_name()/display_path()) that escape control
+    characters to prevent log/terminal injection
+  - add JSON-serializable export() for keys and values preserving raw name bytes
+  - decode malformed (e.g. truncated UTF-16) names best-effort instead of raising
+
 1.2.0
   - [DEPRECATED] records() in HBINBlock, use the more correct cells() instead, by @NiKiZe
   - fix bug in parsing of resident values with length zero, reported and patched by @BridgeyTheGeek
