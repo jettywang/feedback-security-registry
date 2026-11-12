@@ -67,6 +67,26 @@ Advanced users who wish to study the structure of the Windows
 Registry may find the `Registry.RegistryParse` module useful.
 This module implements all known structures of the Windows Registry.
 
+Transaction log recovery
+------------------------
+The `Registry.RegistryRecovery` module and the `recover_hive.py`
+script rebuild a recovered copy of a primary hive from its
+transaction log files (the new "HvLE" format used since Windows 8.1)
+without ever modifying the original evidence:
+
+    python recover_hive.py --primary SYSTEM \
+        --log SYSTEM.LOG1 --log SYSTEM.LOG2 --output-dir out/
+
+The tool first prints a recovery plan (which logs were selected and
+in which order, decided by sequence numbers rather than file names,
+plus the planned page overwrites), then writes the derived hive as
+`<name>.recovered` (or `<name>.partial` when gaps, corrupt entries,
+or out-of-bounds dirty pages prevented a complete recovery) together
+with a `<name>.manifest.json` recording input/output hashes and the
+per-page provenance (source log, entry sequence number, offset, size)
+of every modification. Use `--plan-only` to inspect the plan without
+writing anything.
+
 Wanted
 ------
   - Bug reports.
