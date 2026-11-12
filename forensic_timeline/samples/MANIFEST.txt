@@ -1,0 +1,12 @@
+Controlled mini hives/log produced by reg_evidence/scenarios.py (regenerate via run_demo.py).
+Each hive is 0x2000 bytes: 0x1000 REGF header + one 0x1000 HBIN. All offsets cited in
+the report are absolute file offsets; cell-internal offsets are relative to HBIN 0x1000.
+
+rollback_a.hive            seq 7/7, NK FILETIME = 2019 (baseline)
+rollback_b.hive            seq 8/8, NK FILETIME = 1970 (clock rollback; implausible)
+invalid_filetime.hive      child NK FILETIME = 0xFFFFFFFFFFFFFFFF (OverflowError)
+value_before.hive          ConfigFlag = 7, NK FILETIME = 2019
+value_after.hive           ConfigFlag = 9, identical NK FILETIME (no per-value time)
+settings_appcontainer.dat  0x100 composite value with trailing 8-byte value FILETIME
+recovery_dirty.hive        seq 6/5 mid-update, valid checksum, recover_data=True
+recovery.LOG1              Win8.1-style log, one HvLE seq 6 (no time field), Marvin32 valid

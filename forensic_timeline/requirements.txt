@@ -1,0 +1,3 @@
+# No third-party runtime dependency beyond python-registry itself (this repo).
+# Tests use pytest, already provided by the repository virtual environment.
+-e ..

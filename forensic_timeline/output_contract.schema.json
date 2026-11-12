@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forensic.local/schemas/registry-timeline-evidence-1.0.json",
+  "title": "Registry Time-Evidence Output Contract (separated sources, no fused event time)",
+  "type": "object",
+  "required": ["schema_version", "source_file", "integrity", "header_evidence", "key_evidence", "fusion_policy"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1.0"},
+    "source_file": {"type": "string", "description": "Path or label of the parsed hive/log image."},
+    "hive_name": {"type": "string"},
+    "integrity": {
+      "type": "object",
+      "required": ["checksum_valid", "sequence_consistent", "recovery_required"],
+      "properties": {
+        "checksum_valid": {"type": "boolean"},
+        "sequence_consistent": {"type": "boolean"},
+        "recovery_required": {
+          "type": "object",
+          "required": ["recover_header", "recover_data"],
+          "properties": {
+            "recover_header": {"type": "boolean"},
+            "recover_data": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "header_evidence": {"$ref": "#/$defs/header"},
+    "key_evidence": {"type": "array", "items": {"$ref": "#/$defs/key"}},
+    "fusion_policy": {
+      "type": "string",
+      "description": "States that sources stay separate and that sequence numbers are never converted to wall-clock time."
+    }
+  },
+  "$defs": {
+    "timeInterpretation": {
+      "type": "object",
+      "required": ["raw_uint64", "raw_hex", "interpreted_utc", "interpretation_kind", "uncertainty_reasons"],
+      "properties": {
+        "raw_uint64": {"type": "integer", "minimum": 0},
+        "raw_hex": {"type": "string", "pattern": "^0x[0-9A-F]{16}$"},
+        "interpreted_utc": {"type": ["string", "null"], "format": "date-time"},
+        "interpretation_kind": {
+          "type": "string",
+          "enum": ["valid", "implausible", "zero_epoch", "unrenderable"]
+        },
+        "uncertainty_reasons": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "header": {
+      "type": "object",
+      "required": ["evidence_source", "source_file", "file_kind", "fields", "sequence_state"],
+      "properties": {
+        "evidence_source": {"const": "regf_header"},
+        "file_kind": {"enum": ["primary_hive", "transaction_log"]},
+        "fields": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "type": "object",
+            "required": ["field", "byte_offset", "meaning"],
+            "properties": {
+              "field": {"enum": ["hive_sequence1", "hive_sequence2", "modification_timestamp", "reorganized_timestamp"]},
+              "byte_offset": {"type": "string", "pattern": "^0x[0-9A-F]+$"},
+              "meaning": {"type": "string"},
+              "limitations": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        },
+        "sequence_state": {
+          "type": "object",
+          "required": ["seq1", "seq2", "consistent", "uncertainty_reasons", "wallclock_inference"],
+          "properties": {
+            "seq1": {"type": "integer"},
+            "seq2": {"type": "integer"},
+            "consistent": {"type": "boolean"},
+            "uncertainty_reasons": {"type": "array", "items": {"type": "string"}},
+            "wallclock_inference": {"type": "null"},
+            "wallclock_inference_note": {"type": "string"}
+          }
+        }
+      }
+    },
+    "key": {
+      "type": "object",
+      "required": ["evidence_source", "key_path", "nk_record_offset", "filetime_field_offset", "raw_uint64", "raw_hex", "interpreted_utc", "interpretation_kind", "uncertainty_reasons", "meaning", "limitations", "values"],
+      "properties": {
+        "evidence_source": {"const": "nk_last_written"},
+        "key_path": {"type": "string"},
+        "nk_record_offset": {"type": "string", "pattern": "^0x[0-9A-Fa-f]+$"},
+        "filetime_field_offset": {"type": "string", "pattern": "^0x[0-9A-Fa-f]+$"},
+        "meaning": {"type": "string"},
+        "limitations": {"type": "array", "items": {"type": "string"}},
+        "values": {"type": "array", "items": {"$ref": "#/$defs/value"}}
+      }
+    },
+    "value": {
+      "type": "object",
+      "required": ["name", "type", "vk_record_offset", "has_value_timestamp", "value_timestamp"],
+      "properties": {
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "vk_record_offset": {"type": "string"},
+        "has_value_timestamp": {"type": "boolean"},
+        "value_timestamp": {
+          "type": "object",
+          "required": ["available"],
+          "properties": {
+            "available": {"type": "boolean"},
+            "reason": {"type": "string"},
+            "byte_location": {"type": "string"},
+            "scope_note": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1032 @@
+{
+  "schema_version": "1.0",
+  "scenarios": [
+    {
+      "scenario": "clock_rollback",
+      "teaching_point": "hive B was collected after hive A (seq 8 > 7) but its NK FILETIME decodes to 1970, earlier than A's 2019; ordering by raw FILETIME contradicts the write sequence, indicating clock manipulation/skew rather than a real 1970 event",
+      "byte_offsets": {
+        "root_nk_filetime": "0x1028",
+        "child_nk_filetime": "0x10e0",
+        "regf_header_filetime": "0x0C"
+      },
+      "observations": {
+        "hive_a_2019": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/rollback_a.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 7,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 7,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 7,
+              "seq2": 7,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "hive_b_rollback_1970": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/rollback_b.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 8,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 8,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 116444736000000000,
+                "raw_hex": "0x019DB1DED53E8000",
+                "interpreted_utc": "1970-01-01T00:00:00Z",
+                "interpretation_kind": "implausible",
+                "uncertainty_reasons": [
+                  "decodes before 1980; structurally parseable FILETIME but not a trustworthy Windows write time (clock rollback / skew / corruption / tampering); keep the raw value, do not treat the decoded date as an observed event"
+                ],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 8,
+              "seq2": 8,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 116444736000000000,
+              "raw_hex": "0x019DB1DED53E8000",
+              "interpreted_utc": "1970-01-01T00:00:00Z",
+              "interpretation_kind": "implausible",
+              "uncertainty_reasons": [
+                "decodes before 1980; structurally parseable FILETIME but not a trustworthy Windows write time (clock rollback / skew / corruption / tampering); keep the raw value, do not treat the decoded date as an observed event"
+              ],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 116444736000000000,
+              "raw_hex": "0x019DB1DED53E8000",
+              "interpreted_utc": "1970-01-01T00:00:00Z",
+              "interpretation_kind": "implausible",
+              "uncertainty_reasons": [
+                "decodes before 1980; structurally parseable FILETIME but not a trustworthy Windows write time (clock rollback / skew / corruption / tampering); keep the raw value, do not treat the decoded date as an observed event"
+              ],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "scenario": "invalid_filetime",
+      "teaching_point": "the child NK raw FILETIME is 0xFFFFFFFFFFFFFFFF; RegistryKey.timestamp() raises OverflowError. The bytes are still evidence, but no UTC interpretation exists and it must not be silently dropped or forced to an epoch.",
+      "byte_offsets": {
+        "child_nk_filetime": "0x10e0",
+        "root_nk_filetime": "0x1028"
+      },
+      "observations": {
+        "hive": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/invalid_filetime.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 9,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 9,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 9,
+              "seq2": 9,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 18446744073709551615,
+              "raw_hex": "0xFFFFFFFFFFFFFFFF",
+              "interpreted_utc": null,
+              "interpretation_kind": "unrenderable",
+              "uncertainty_reasons": [
+                "value exceeds datetime range; parse_windows_timestamp() raises OverflowError, no UTC time exists"
+              ],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "library_call_probe": {
+        "call": "Registry(open('invalid_filetime.hive')).root().subkeys()[0].timestamp()",
+        "raw_field": "0xFFFFFFFFFFFFFFFF",
+        "behavior": "raises OverflowError('date value out of range'); extraction backend keeps the raw bytes and marks interpretation_kind=unrenderable instead of crashing"
+      }
+    },
+    {
+      "scenario": "value_only_change",
+      "teaching_point": "ConfigFlag changed 7 -> 9 while the SvcA NK last-written FILETIME is byte-identical. Standard hives store no per-value timestamp, so the value change has no independently confirmable time; only the enclosing key time is available, and it did not move.",
+      "byte_offsets": {
+        "child_nk_filetime": "0x10e0"
+      },
+      "observations": {
+        "before": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/value_before.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 10,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 10,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 10,
+              "seq2": 10,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "after": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/value_after.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 11,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 11,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 11,
+              "seq2": 11,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "value_change_analysis": {
+        "nk_filetime_raw_before": "0x01D4CF684E6E8000",
+        "nk_filetime_raw_after": "0x01D4CF684E6E8000",
+        "nk_filetime_identical_bytes": true,
+        "config_flag_before": 7,
+        "config_flag_after": 9,
+        "conclusion": "value changed but no per-value timestamp exists; the enclosing NK FILETIME did not move, so an independent time for this value change is unconfirmable (observation, not an inferred event time)"
+      }
+    },
+    {
+      "scenario": "appcontainer_value_timestamp",
+      "teaching_point": "VKRecord.has_timestamp() is True only when the value data type has the 0x100 composite flag and >=8 bytes; the timestamp is the final 8 bytes of the value data. RegistryValue.timestamp() works here but raises ValueError on every ordinary SYSTEM/SOFTWARE/NTUSER value, which have no per-value time.",
+      "byte_offsets": {
+        "value_timestamp": "final 8 bytes of the AppPref VK data"
+      },
+      "observations": {
+        "settings_dat": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/settings_appcontainer.dat",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 3,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 3,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 3,
+              "seq2": 3,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "Root": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "AppPref",
+                  "type": "RegUint32",
+                  "value_timestamp_available": true,
+                  "value_timestamp_detail": {
+                    "available": true,
+                    "byte_location": "final 8 bytes of the VK value data (settings.dat composite value only)",
+                    "raw_uint64": 131958336020000000,
+                    "raw_hex": "0x01D4CF684F9FAD00",
+                    "interpreted_utc": "2019-02-28T13:20:02Z",
+                    "interpretation_kind": "valid",
+                    "uncertainty_reasons": [],
+                    "scope_note": "only populated in AppContainer settings.dat hives; absent from SYSTEM/SOFTWARE/NTUSER.DAT and most standard hives"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "value_timestamp_interface": {
+        "interface": "RegistryValue.timestamp() / VKRecord.has_timestamp()",
+        "observed": [
+          {
+            "name": "AppPref",
+            "type": "RegUint32",
+            "value_timestamp_available": true,
+            "value_timestamp_detail": {
+              "available": true,
+              "byte_location": "final 8 bytes of the VK value data (settings.dat composite value only)",
+              "raw_uint64": 131958336020000000,
+              "raw_hex": "0x01D4CF684F9FAD00",
+              "interpreted_utc": "2019-02-28T13:20:02Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "scope_note": "only populated in AppContainer settings.dat hives; absent from SYSTEM/SOFTWARE/NTUSER.DAT and most standard hives"
+            }
+          }
+        ],
+        "note": "available=True only for this 0x100 composite value; all values in the other scenarios report available=False with the ValueError reason"
+      }
+    },
+    {
+      "scenario": "transaction_log_recovery",
+      "teaching_point": "dirty primary is seq 6/5; the HvLE (seq 6, no timestamp field) carries a page whose child NK FILETIME is 2020. Recovery replays the page and equalizes seq to 6, but the REGF header FILETIME at 0x0C stays 2019. The log establishes order via sequence numbers, never a wall-clock instant.",
+      "byte_offsets": {
+        "child_nk_filetime": "0x10e0",
+        "hvle_sequence": "LOG1 0x200+0x0C",
+        "regf_header_filetime": "0x0C"
+      },
+      "observations": {
+        "dirty_primary_before": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": false,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": true
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/samples/recovery_dirty.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 6,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 5,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 6,
+              "seq2": 5,
+              "consistent": false,
+              "uncertainty_reasons": [
+                "seq1 != seq2: hive was mid-update; on-disk data predates an incomplete transaction, apply logs before trusting key state"
+              ],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "transaction_log_header": {
+          "evidence_source": "regf_header",
+          "source_file": "recovery.LOG1",
+          "file_kind": "transaction_log",
+          "fields": [
+            {
+              "field": "hive_sequence1",
+              "byte_offset": "0x04",
+              "raw_uint32": 6,
+              "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+            },
+            {
+              "field": "hive_sequence2",
+              "byte_offset": "0x08",
+              "raw_uint32": 6,
+              "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+            },
+            {
+              "field": "modification_timestamp",
+              "byte_offset": "0x0C",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+              "limitations": [
+                "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+              ]
+            },
+            {
+              "field": "reorganized_timestamp",
+              "byte_offset": "0xA8",
+              "raw_uint64": 0,
+              "raw_hex": "0x0000000000000000",
+              "interpreted_utc": "1601-01-01T00:00:00Z",
+              "interpretation_kind": "zero_epoch",
+              "uncertainty_reasons": [
+                "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+              ],
+              "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+              "limitations": [
+                "library docs state the value is garbage on pre-Windows-8 hives"
+              ]
+            }
+          ],
+          "sequence_state": {
+            "seq1": 6,
+            "seq2": 6,
+            "consistent": true,
+            "uncertainty_reasons": [
+              "sequence numbers in a LOG file order HvLE entries only; they carry no wall-clock component and cannot be converted to a time"
+            ],
+            "wallclock_inference": null,
+            "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+          }
+        },
+        "recovered_primary_after": {
+          "integrity": {
+            "checksum_valid": true,
+            "sequence_consistent": true,
+            "recovery_required": {
+              "recover_header": false,
+              "recover_data": false
+            }
+          },
+          "header": {
+            "evidence_source": "regf_header",
+            "source_file": "/Users/apple/Documents/用户反馈项目/run-control/first-five/jobs/FB-20261112-SEC9-082/workspace/forensic_timeline/output/recovery_recovered.hive",
+            "file_kind": "primary_hive",
+            "fields": [
+              {
+                "field": "hive_sequence1",
+                "byte_offset": "0x04",
+                "raw_uint32": 6,
+                "meaning": "incremented before a primary-file write; transaction counter, not a timestamp"
+              },
+              {
+                "field": "hive_sequence2",
+                "byte_offset": "0x08",
+                "raw_uint32": 6,
+                "meaning": "set equal to sequence1 once a primary-file write completes; transaction counter, not a timestamp"
+              },
+              {
+                "field": "modification_timestamp",
+                "byte_offset": "0x0C",
+                "raw_uint64": 131958336000000000,
+                "raw_hex": "0x01D4CF684E6E8000",
+                "interpreted_utc": "2019-02-28T13:20:00Z",
+                "interpretation_kind": "valid",
+                "uncertainty_reasons": [],
+                "meaning": "last time this hive image was flushed to disk; a single header value for the whole file, not per-key",
+                "limitations": [
+                  "not updated by RegistryLog recovery in python-registry (only seq/hbins_size/flags/checksum are rewritten)",
+                  "transaction log REGF headers snapshot the primary header and frequently repeat an identical stale FILETIME"
+                ]
+              },
+              {
+                "field": "reorganized_timestamp",
+                "byte_offset": "0xA8",
+                "raw_uint64": 0,
+                "raw_hex": "0x0000000000000000",
+                "interpreted_utc": "1601-01-01T00:00:00Z",
+                "interpretation_kind": "zero_epoch",
+                "uncertainty_reasons": [
+                  "raw value is 0; library renders 1601-01-01 but this usually means 'never written' / unset, not a real event"
+                ],
+                "meaning": "last hive reorganization (defragmentation) time; used from Windows 8 onward",
+                "limitations": [
+                  "library docs state the value is garbage on pre-Windows-8 hives"
+                ]
+              }
+            ],
+            "sequence_state": {
+              "seq1": 6,
+              "seq2": 6,
+              "consistent": true,
+              "uncertainty_reasons": [],
+              "wallclock_inference": null,
+              "wallclock_inference_note": "sequence numbers establish ordering only; this tool intentionally refuses to derive a wall-clock time from them"
+            }
+          },
+          "keys": {
+            "CMI": {
+              "nk_record_offset": "0x1024",
+              "filetime_field_offset": "0x1028",
+              "raw_uint64": 131958336000000000,
+              "raw_hex": "0x01D4CF684E6E8000",
+              "interpreted_utc": "2019-02-28T13:20:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "Note",
+                  "type": "RegSZ",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            },
+            "CMI\\SvcA": {
+              "nk_record_offset": "0x10dc",
+              "filetime_field_offset": "0x10e0",
+              "raw_uint64": 132256800000000000,
+              "raw_hex": "0x01D5DEDBDF214000",
+              "interpreted_utc": "2020-02-09T00:00:00Z",
+              "interpretation_kind": "valid",
+              "uncertainty_reasons": [],
+              "values": [
+                {
+                  "name": "ConfigFlag",
+                  "type": "RegDWord",
+                  "value_timestamp_available": false,
+                  "value_timestamp_detail": {
+                    "available": false,
+                    "reason": "VK data type lacks the 0x100 AppContainer composite flag; RegistryValue.timestamp() would raise ValueError"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "recovery_field_diff": {
+        "header_filetime_0x0C_before": "0x01D4CF684E6E8000",
+        "header_filetime_0x0C_after": "0x01D4CF684E6E8000",
+        "header_filetime_changed": false,
+        "child_nk_filetime_before": "0x01D4CF684E6E8000",
+        "child_nk_filetime_after": "0x01D5DEDBDF214000",
+        "sequence_before": [
+          {
+            "recover_header": false,
+            "recover_data": true
+          },
+          6,
+          5
+        ],
+        "sequence_after": [
+          {
+            "recover_header": false,
+            "recover_data": false
+          },
+          6,
+          6
+        ],
+        "note": "HvLE has no timestamp field; only seq 6 plus dirty-page data. Header FILETIME is deliberately untouched by library recovery, while the replayed page updates the child NK FILETIME."
+      }
+    }
+  ],
+  "policy_note": "Each time source is reported separately. No field is promoted to a single 'event time' and sequence numbers are never converted to wall-clock time."
+}
