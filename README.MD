@@ -67,6 +67,31 @@ Advanced users who wish to study the structure of the Windows
 Registry may find the `Registry.RegistryParse` module useful.
 This module implements all known structures of the Windows Registry.
 
+
+Security Descriptor Evidence
+----------------------------
+For forensic reporting, a `RegistryKey` can describe the security descriptor
+it declares through its NK -> SK reference via `key.security()`. This returns
+a `Registry.SecurityParse.SecurityEvidence` object that follows the real
+pointer to the shared SK record (one SK record may back many keys) and exposes:
+
+  - owner and group SIDs,
+  - DACL/SACL presence, with a present-but-empty ACL kept distinct from a
+    missing ACL (the relevant control bit clear and no pointer),
+  - every ACE that can be parsed (type, flags, access mask, trustee SID),
+  - the absolute offset and raw bytes of the descriptor, ACLs, ACEs and SIDs,
+  - the SK usage counter alongside an independently counted number of NK
+    references, and
+  - separate `anomalies` (malformed offsets/sizes, overruns, counter mismatch)
+    and `unsupported` (for example an unknown ACE type) lists.
+
+The feature presents structural facts only. It does not compute Windows
+effective permissions or expand generic rights, and a corrupt record affects
+only the key that references it: each call returns a fresh evidence object so
+one bad key can never cause another key to display the wrong permissions. See
+`samples/reg_security.py` for a report renderer.
+
+
 Wanted
 ------
   - Bug reports.

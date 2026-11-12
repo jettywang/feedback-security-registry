@@ -519,6 +519,28 @@ class REGFBlock(RegistryBlock):
             h = h.next()
             yield h
 
+    def sk_references(self):
+        """
+        Enumerate the raw SK pointers held by every in-use NK record reachable
+        through the HBIN cell allocations, independent of the SK usage
+        counters. Yields (nk_cell_relative_offset, sk_cell_relative_offset)
+        tuples, where offsets are relative to the start of the first HBIN
+        (the same convention used inside the records).
+
+        Malformed cells are skipped so a corrupt record cannot terminate the
+        scan; callers use the results to cross-check the SK usage counters.
+        """
+        for hbin in self.hbins():
+            for cell in hbin.cells():
+                if cell.is_free() or cell.data_id() != b"nk":
+                    continue
+                nk_relative = cell.offset() - self.first_hbin_offset()
+                sk_relative = self._buf[cell.data_offset() + 0x2C:
+                                        cell.data_offset() + 0x30]
+                if len(sk_relative) == 4:
+                    yield (nk_relative,
+                           struct.unpack_from(str("<I"), sk_relative, 0)[0])
+
     def first_log_entry_offset(self):
         """
         Get the offset of the first log entry as an unsigned integer.
@@ -1246,6 +1268,58 @@ class SKRecord(Record):
     def __str__(self):
         return "SK Record at 0x%x" % (self.offset())
 
+    def prev_sk_offset(self):
+        """
+        Get the raw relative offset of the previous SK record in the
+        hive-wide SK list. A value of 0xFFFFFFFF marks the first record.
+        """
+        return self._offset_prev_sk
+
+    def next_sk_offset(self):
+        """
+        Get the raw relative offset of the next SK record in the
+        hive-wide SK list. A value of 0xFFFFFFFF marks the last record.
+        """
+        return self._offset_next_sk
+
+    def reference_count(self):
+        """
+        Get the SK record usage counter as stored in the hive. This is the
+        number of NK records the hive claims reference this shared record;
+        it is not verified here.
+        """
+        return self.unpack_dword(0xC)
+
+    def descriptor_size(self):
+        """
+        Get the size in bytes of the self-relative security descriptor
+        contained in this SK record, as declared by the record.
+        """
+        return self.unpack_dword(0x10)
+
+    def descriptor_offset(self):
+        """
+        Get the absolute buffer offset at which the security descriptor
+        begins (immediately after the 0x14 byte SK record header).
+        """
+        return self._offset + 0x14
+
+    def descriptor_bytes(self):
+        """
+        Get the raw security descriptor bytes, bounded by the descriptor size
+        declared in the SK record. Raises RegistryStructureDoesNotExist if the
+        declared span overruns the hive buffer.
+        """
+        start = self.descriptor_offset()
+        size = self.descriptor_size()
+        end = start + size
+        if size == 0 or end > len(self._buf):
+            raise RegistryStructureDoesNotExist(
+                "SK Record at 0x%x declares invalid descriptor size %d "
+                "(end 0x%x, hive size 0x%x)" %
+                (self.offset(), size, end, len(self._buf)))
+        return self._buf[start:end]
+
 
 class ValuesList(HBINCell):
     """
@@ -1587,13 +1661,33 @@ class NKRecord(Record):
         d = HBINCell(self._buf, offset, self.parent())
         return NKRecord(self._buf, d.data_offset(), self.parent())
 
+    def sk_offset(self):
+        """
+        Get the raw relative offset of the SK cell referenced by this NK
+        record (the value stored at NK offset 0x2C). This is the real,
+        uninterpreted reference along which the shared security record is
+        found; callers can resolve it via sk_record().
+        """
+        return self.unpack_dword(0x2C)
+
+    def sk_cell_offset(self):
+        """
+        Get the absolute buffer offset of the SK cell (its size field) that
+        this NK record references.
+        """
+        return self.abs_offset_from_hbin_offset(self.sk_offset())
+
     def sk_record(self):
         """
         Get the security descriptor associated with this NKRecord as an SKRecord.
+        Raises RegistryStructureDoesNotExist if the referenced cell is free or
+        cannot be read, and ParseException if it does not contain an SK record.
         """
-        offset = self.abs_offset_from_hbin_offset(self.unpack_dword(0x2C))
-
-        d = HBINCell(self._buf, offset, self)
+        d = HBINCell(self._buf, self.sk_cell_offset(), self)
+        if d.is_free():
+            raise RegistryStructureDoesNotExist(
+                "NK Record at 0x%x references free cell at 0x%x for SK record" %
+                (self.offset(), d.offset()))
         return SKRecord(self._buf, d.data_offset(), d)
 
     def values_number(self):

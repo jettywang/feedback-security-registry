@@ -23,6 +23,7 @@ import ntpath
 from enum import Enum
 
 from . import RegistryParse
+from . import SecurityParse
 
 RegSZ = 0x0001
 RegExpandSZ = 0x0002
@@ -374,6 +375,19 @@ class RegistryKey(object):
     	Return the number of subkeys associated with this key
     	"""
     	return self._nkrecord.subkey_number()
+
+    def security(self):
+        """
+        Return a SecurityParse.SecurityEvidence object describing the security
+        descriptor that this key declares through its NK -> SK reference.
+
+        The result is evidence only: it presents owner, group, DACL/SACL
+        presence and parsed ACEs with their raw bytes and offsets, and records
+        structural anomalies and unsupported structures separately. It does
+        not compute Windows effective permissions, and it never raises for a
+        corrupt record.
+        """
+        return SecurityParse.extract_security_evidence(self._nkrecord)
 
 
 class Registry(object):
